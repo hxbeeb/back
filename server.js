@@ -26,7 +26,7 @@ app.use(
 
 // Middleware
 app.use(cors({
-  origin: ["http://localhost:5173", "https://684cf29ef12af9e6cadbdc0d--magical-pavlova-ea008c.netlify.app"],
+  origin: ["http://localhost:5173", "https://magical-pavlova-ea008c.netlify.app"],
   credentials: true
 }));
 app.use(express.json());
@@ -59,7 +59,7 @@ const upload = multer({ storage });
 // Socket.io
 const io = socketIO(server, {
   cors: {
-    origin: ["http://localhost:5173","https://684cf29ef12af9e6cadbdc0d--magical-pavlova-ea008c.netlify.app"],
+    origin: ["http://localhost:5173","https://magical-pavlova-ea008c.netlify.app"],
     credentials: true,
   },
 });
