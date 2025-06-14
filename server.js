@@ -1,34 +1,41 @@
 const express = require("express");
 const dotenv = require("dotenv");
 const mongoose = require("mongoose");
-const session = require("express-session");
-const passport = require("passport");
 const cors = require("cors");
+const session = require("express-session");
+const multer = require("multer");
+const socketIO = require("socket.io");
+const http = require("http");
+const { ClerkExpressWithAuth, getAuth,Clerk  } = require("@clerk/clerk-sdk-node");
+
 const User = require("./models/User");
 const Conversation = require("./models/Conversation");
 const Message = require("./models/Message");
-const GoogleStrategy = require("passport-google-oauth20").Strategy;
-const multer = require('multer');
-// const upload = multer({ dest: 'uploads/' });
-// Load environment variables
-dotenv.config();
 
-// Initialize Express app
+dotenv.config();
+const clerk = new Clerk({ secretKey: process.env.CLERK_SECRET_KEY });
 const app = express();
+const server = http.createServer(app);
+
+// Clerk middleware
+app.use(
+  ClerkExpressWithAuth({
+    secretKey: process.env.CLERK_SECRET_KEY,
+  })
+);
 
 // Middleware
 app.use(cors({
-  origin: ["http://localhost:5173","https://684cf29ef12af9e6cadbdc0d--magical-pavlova-ea008c.netlify.app"],
+  origin: ["http://localhost:5173", "https://684cf29ef12af9e6cadbdc0d--magical-pavlova-ea008c.netlify.app"],
   credentials: true
 }));
 app.use(express.json());
+
 app.use(session({
   secret: "your_secret",
   resave: false,
   saveUninitialized: true
 }));
-app.use(passport.initialize());
-app.use(passport.session());
 
 // Connect to MongoDB
 const connectDB = async () => {
@@ -40,68 +47,92 @@ const connectDB = async () => {
   }
 };
 connectDB();
+
+// Multer for file uploads
 app.use('/uploads', express.static('uploads'));
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/"); // Make sure this directory exists
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
-  },
+  destination: (req, file, cb) => cb(null, "uploads/"),
+  filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
 });
 const upload = multer({ storage });
 
-// Passport Configuration
-passport.serializeUser((user, done) => {
-  done(null, user.id);
+// Socket.io
+const io = socketIO(server, {
+  cors: {
+    origin: ["http://localhost:5173","https://684cf29ef12af9e6cadbdc0d--magical-pavlova-ea008c.netlify.app"],
+    credentials: true,
+  },
 });
-passport.deserializeUser(async (id, done) => {
-  try {
-    const user = await User.findById(id);
-    done(null, user);
-  } catch (err) {
-    done(err, null);
-  }
-});
-passport.use(new GoogleStrategy({
-  clientID: process.env.client_id,
-  clientSecret: process.env.client_secret,
-  callbackURL: "/auth/google/callback"
-},
-  async (accessToken, refreshToken, profile, cb) => {
-    try {
-      const existingUser = await User.findOne({ email: profile.emails[0].value });
-      if (existingUser) return cb(null, existingUser);
 
-      const newUser = new User({
-        name: profile.displayName,
-        email: profile.emails[0].value,
-        image: profile.photos[0].value
-      });
-      await newUser.save();
-      cb(null, newUser);
-    } catch (err) {
-      cb(err, null);
-    }
-  }
-));
+io.on("connection", (socket) => {
+  console.log("New client connected");
+
+  socket.on("join_conversation", (room) => {
+    socket.join(room);
+  });
+
+  socket.on("send_message", (data) => {
+    io.to(data.conversationId).emit("receive_message", data);
+  });
+
+  socket.on("offer", ({ to, offer }) => {
+    io.to(to).emit("offer", { from: socket.id, offer });
+  });
+
+  socket.on("answer", ({ to, answer }) => {
+    io.to(to).emit("answer", { from: socket.id, answer });
+  });
+
+  socket.on("ice-candidate", ({ to, candidate }) => {
+    io.to(to).emit("ice-candidate", { from: socket.id, candidate });
+  });
+
+  socket.on("disconnect", () => {
+    console.log("Client disconnected");
+  });
+});
 
 // Routes
-app.get("/auth/google", passport.authenticate("google", { scope: ["profile", "email"] }));
-app.get("/auth/google/callback",
-  passport.authenticate("google", { failureRedirect: "/" }),
-  (req, res) => {
-    res.redirect("https://684cf29ef12af9e6cadbdc0d--magical-pavlova-ea008c.netlify.app/chat");
-    // res.redirect("http://localhost:5173/chat");
-  }
-);
-app.get("/me", (req, res) => {
-  if (req.isAuthenticated()) {
-    res.json(req.user);
-  } else {
-    res.status(401).json({ error: "Not authenticated" });
+
+// Clerk Authenticated user
+// Clerk Authenticated user
+app.get("/me", async (req, res) => {
+  try {
+    console.log(req.auth);
+    const { userId } = req.auth;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+    const user = await clerk.users.getUser(userId);
+    const email = user.emailAddresses[0].emailAddress;
+
+    // Check if user already exists in MongoDB
+    let dbUser = await User.findOne({ clerkId: userId });
+
+    if (!dbUser) {
+      // If not, create a new user
+      dbUser = new User({
+        clerkId: user.id,
+        name: user.fullName,
+        email:email,
+        image: user.imageUrl,
+      });
+      await dbUser.save();
+    }
+
+    res.json({
+      id: dbUser._id,
+      clerkId: dbUser.clerkId,
+      name: dbUser.name,
+      email: dbUser.email,
+      image: dbUser.image,
+    });
+  } catch (error) {
+    console.error("Error in /me:", error.message);
+    res.status(500).json({ error: "Failed to fetch or create user" });
   }
 });
+
+// Fetch all users
 app.get("/users", async (req, res) => {
   try {
     const users = await User.find();
@@ -111,16 +142,14 @@ app.get("/users", async (req, res) => {
   }
 });
 
-// Chat System
-
-// Create/Get Conversation between 2 users
+// Create/Get conversation
 app.post("/conversations", async (req, res) => {
   const { senderId, receiverId } = req.body;
-  if (!senderId || !receiverId) return res.status(400).json({ error: "Missing senderId or receiverId" });
+  if (!senderId || !receiverId)
+    return res.status(400).json({ error: "Missing senderId or receiverId" });
 
   try {
     let convo = await Conversation.findOne({ members: { $all: [senderId, receiverId] } });
-    console.log("found");
 
     if (!convo) {
       convo = new Conversation({ members: [senderId, receiverId] });
@@ -155,7 +184,6 @@ app.get("/conversations/:userId", async (req, res) => {
   }
 });
 
-
 // Send a message
 app.post("/messages", async (req, res) => {
   const { conversationId, senderId, text } = req.body;
@@ -172,20 +200,13 @@ app.post("/messages", async (req, res) => {
   }
 
   try {
-    console.log("conversationId:", conversationId);
-    console.log("senderId:", senderId);
-    console.log("text:", text);
-   
-
     const message = new Message({
       conversationId: new mongoose.Types.ObjectId(conversationId),
       senderId: new mongoose.Types.ObjectId(senderId),
       text
     });
 
-    console.log("savinggg");
     await message.save();
-    console.log("✅ saved message");
 
     await Conversation.findByIdAndUpdate(conversationId, {
       lastMessage: { text, timestamp: new Date() }
@@ -193,7 +214,6 @@ app.post("/messages", async (req, res) => {
 
     res.status(201).json(message);
   } catch (err) {
-    console.error("❌ Error while saving message:", err);
     res.status(500).json({ error: "Failed to send message", details: err.message });
   }
 });
@@ -208,9 +228,7 @@ app.get("/messages/:conversationId", async (req, res) => {
   }
 });
 
-
-
-
+// File upload message
 app.post('/messages/file', upload.single('file'), async (req, res) => {
   const { conversationId, senderId } = req.body;
   const file = req.file;
@@ -223,14 +241,15 @@ app.post('/messages/file', upload.single('file'), async (req, res) => {
     conversationId,
     senderId,
     text: `${file.originalname}`,
-    fileUrl: `/uploads/${file.filename}`, // Save URL
+    fileUrl: `/uploads/${file.filename}`,
   });
 
   await message.save();
   res.status(201).json(message);
 });
+
 // Start server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
