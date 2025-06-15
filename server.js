@@ -109,10 +109,11 @@ app.get("/me", async (req, res) => {
     let dbUser = await User.findOne({ clerkId: userId });
 
     if (!dbUser) {
+      console.log(user.firstName+" "+user.lastName);
       // If not, create a new user
       dbUser = new User({
         clerkId: user.id,
-        name: user.fullName,
+        name: user.firstName+" "+user.lastName,
         email:email,
         image: user.imageUrl,
       });
