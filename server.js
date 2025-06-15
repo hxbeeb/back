@@ -59,14 +59,52 @@ const upload = multer({ storage });
 // Socket.io
 const io = socketIO(server, {
   cors: {
-    origin: ["http://localhost:5173","https://magical-pavlova-ea008c.netlify.app"],
+    origin: ["http://localhost:5173", "https://magical-pavlova-ea008c.netlify.app"],
     credentials: true,
   },
 });
 
+const users = {}; // Mapping of userId → socketId
+
 io.on("connection", (socket) => {
   console.log("New client connected");
 
+  // ✅ Register user with their userId
+  socket.on("register", (userId) => {
+    users[userId] = socket.id;
+    console.log(`Registered user ${userId} with socket ${socket.id}`);
+  });
+
+  // ✅ Video/Audio Call Events
+  socket.on("offer", ({ to, offer, type }) => {
+    const targetSocket = users[to];
+    if (targetSocket) {
+      io.to(targetSocket).emit("offer", { from: socket.id, offer, type });
+    }
+  });
+
+  socket.on("answer", ({ to, answer }) => {
+    const targetSocket = users[to];
+    if (targetSocket) {
+      io.to(targetSocket).emit("answer", { from: socket.id, answer });
+    }
+  });
+
+  socket.on("ice-candidate", ({ to, candidate }) => {
+    const targetSocket = users[to];
+    if (targetSocket) {
+      io.to(targetSocket).emit("ice-candidate", { from: socket.id, candidate });
+    }
+  });
+
+  socket.on("end-call", ({ to }) => {
+    const targetSocket = users[to];
+    if (targetSocket) {
+      io.to(targetSocket).emit("end-call");
+    }
+  });
+
+  // ✅ Messaging (Unchanged)
   socket.on("join_conversation", (room) => {
     socket.join(room);
   });
@@ -75,22 +113,19 @@ io.on("connection", (socket) => {
     io.to(data.conversationId).emit("receive_message", data);
   });
 
-  socket.on("offer", ({ to, offer }) => {
-    io.to(to).emit("offer", { from: socket.id, offer });
-  });
-
-  socket.on("answer", ({ to, answer }) => {
-    io.to(to).emit("answer", { from: socket.id, answer });
-  });
-
-  socket.on("ice-candidate", ({ to, candidate }) => {
-    io.to(to).emit("ice-candidate", { from: socket.id, candidate });
-  });
-
+  // ✅ Cleanup on disconnect
   socket.on("disconnect", () => {
+    for (let userId in users) {
+      if (users[userId] === socket.id) {
+        delete users[userId];
+        console.log(`User ${userId} disconnected`);
+        break;
+      }
+    }
     console.log("Client disconnected");
   });
 });
+
 
 // Routes
 
