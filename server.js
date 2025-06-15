@@ -59,7 +59,7 @@ const upload = multer({ storage });
 // Socket.io
 const io = socketIO(server, {
   cors: {
-    origin: ["http://localhost:5173", "https://magical-pavlova-ea008c.netlify.app"],
+    origin: ["http://localhost:5173", "https://sike-chat.netlify.app"],
     credentials: true,
   },
 });
