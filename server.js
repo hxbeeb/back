@@ -26,7 +26,7 @@ app.use(
 
 // Middleware
 app.use(cors({
-  origin: ["http://localhost:5173", "https://sike-chat.netlify.app"],
+  origin: ["http://localhost:5173", "https://magical-pavlova-ea008c.netlify.app"],
   credentials: true
 }));
 app.use(express.json());
@@ -59,13 +59,11 @@ const upload = multer({ storage });
 // Socket.io
 const io = socketIO(server, {
   cors: {
-    origin: ["http://localhost:5173", "https://sike-chat.netlify.app"],
+    origin: ["http://localhost:5173","https://magical-pavlova-ea008c.netlify.app"],
     credentials: true,
   },
 });
-
-const users = {}; // Mapping of userId → socketId
-
+const users = {}; 
 io.on("connection", (socket) => {
   console.log("New client connected");
 
@@ -76,26 +74,46 @@ io.on("connection", (socket) => {
   });
 
   // ✅ Video/Audio Call Events
-  socket.on("offer", ({ to, offer, type }) => {
+  socket.on("offer", ({ to, offer, type,fromUserId }) => {
     const targetSocket = users[to];
     if (targetSocket) {
-      io.to(targetSocket).emit("offer", { from: socket.id, offer, type });
+      io.to(targetSocket).emit("offer", { fromUserId,offer, type });
     }
   });
 
-  socket.on("answer", ({ to, answer }) => {
-    const targetSocket = users[to];
-    if (targetSocket) {
-      io.to(targetSocket).emit("answer", { from: socket.id, answer });
-    }
-  });
+ socket.on("answer", ({ to, answer }, callback) => {
+  const targetSocket = users[to];
+  console.log("target"+to);
+  if (targetSocket) {
+    io.to(targetSocket).emit("answer", { answer });
+    callback?.({ success: true }); // ✅ This is required for client ack to resolve
+  } else {
+    callback({ error: "User not found" }); // ✅ Reject on client side
+  }
+});
 
-  socket.on("ice-candidate", ({ to, candidate }) => {
-    const targetSocket = users[to];
-    if (targetSocket) {
-      io.to(targetSocket).emit("ice-candidate", { from: socket.id, candidate });
-    }
+
+// Make sure your server properly relays ICE candidates
+socket.on('ice-candidate', (data) => {
+  const { to, from, candidate } = data;
+  
+  if (!to || !from || !candidate) {
+    console.error('Invalid ICE candidate data');
+    return;
+  }
+
+  // Verify both users are connected
+  if (!io.sockets.sockets.get(to) || !io.sockets.sockets.get(from)) {
+    console.error('One or both users not connected');
+    return;
+  }
+
+  console.log(`Relaying ICE candidate from ${from} to ${to}`);
+  io.to(to).emit('ice-candidate', { 
+    from, 
+    candidate 
   });
+});
 
   socket.on("end-call", ({ to }) => {
     const targetSocket = users[to];
@@ -108,6 +126,7 @@ io.on("connection", (socket) => {
   socket.on("join_conversation", (room) => {
     socket.join(room);
   });
+
 
   socket.on("send_message", (data) => {
     io.to(data.conversationId).emit("receive_message", data);
@@ -125,7 +144,6 @@ io.on("connection", (socket) => {
     console.log("Client disconnected");
   });
 });
-
 
 // Routes
 
