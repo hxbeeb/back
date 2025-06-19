@@ -114,6 +114,13 @@ socket.on('ice-candidate', (data) => {
     candidate 
   });
 });
+socket.on("call-rejected", ({ to }) => {
+ const targetSocket = users[to];
+    if (targetSocket) {
+      io.to(targetSocket).emit("end-call");
+    }
+});
+
 
   socket.on("end-call", ({ to }) => {
     const targetSocket = users[to];
@@ -125,11 +132,13 @@ socket.on('ice-candidate', (data) => {
   // ✅ Messaging (Unchanged)
   socket.on("join_conversation", (room) => {
     socket.join(room);
+    console.log("room joined");
   });
 
 
   socket.on("send_message", (data) => {
     io.to(data.conversationId).emit("receive_message", data);
+    console.log("sending msgg");
   });
 
   // ✅ Cleanup on disconnect
