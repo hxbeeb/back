@@ -26,7 +26,7 @@ app.use(
 
 // Middleware
 app.use(cors({
-  origin: ["http://localhost:5173", "https://sike-chat.netlify.app"],
+  origin: ["http://localhost:5173", "https://wave-link.netlify.app"],
   credentials: true
 }));
 app.use(express.json());
@@ -59,7 +59,7 @@ const upload = multer({ storage });
 // Socket.io
 const io = socketIO(server, {
   cors: {
-    origin: ["http://localhost:5173","https://sike-chat.netlify.app"],
+    origin: ["http://localhost:5173","https://wave-link.netlify.app"],
     credentials: true,
   },
 });
@@ -74,10 +74,13 @@ io.on("connection", (socket) => {
   });
 
   // ✅ Video/Audio Call Events
-  socket.on("offer", ({ to, offer, type,fromUserId }) => {
+  socket.on("offer", ({ to, offer, type, fromUserId }) => {
     const targetSocket = users[to];
+    console.log(`[OFFER] from ${fromUserId} to ${to} (socket: ${targetSocket})`);
     if (targetSocket) {
-      io.to(targetSocket).emit("offer", { fromUserId,offer, type });
+      io.to(targetSocket).emit("offer", { fromUserId, offer, type });
+    } else {
+      console.log(`[OFFER] Target user ${to} not connected`);
     }
   });
 
@@ -102,14 +105,17 @@ socket.on('ice-candidate', (data) => {
     return;
   }
 
-  // Verify both users are connected
-  if (!io.sockets.sockets.get(to) || !io.sockets.sockets.get(from)) {
+  // Look up socket IDs from user IDs
+  const toSocket = users[to];
+  const fromSocket = users[from];
+
+  if (!toSocket || !fromSocket) {
     console.error('One or both users not connected');
     return;
   }
 
   console.log(`Relaying ICE candidate from ${from} to ${to}`);
-  io.to(to).emit('ice-candidate', { 
+  io.to(toSocket).emit('ice-candidate', { 
     from, 
     candidate 
   });
