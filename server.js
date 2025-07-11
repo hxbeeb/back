@@ -7,6 +7,8 @@ const multer = require("multer");
 const socketIO = require("socket.io");
 const http = require("http");
 const { ClerkExpressWithAuth, getAuth,Clerk  } = require("@clerk/clerk-sdk-node");
+const { S3Client, PutObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 const User = require("./models/User");
 const Conversation = require("./models/Conversation");
@@ -54,7 +56,16 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, "uploads/"),
   filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
 });
-const upload = multer({ storage });
+const upload = multer({ storage: multer.memoryStorage() });
+
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  }
+});
+const S3_BUCKET = process.env.S3_BUCKET;
 
 // Socket.io
 const io = socketIO(server, {
@@ -297,24 +308,50 @@ app.get("/messages/:conversationId", async (req, res) => {
   }
 });
 
-// File upload message
+// Replace the /messages/file route with S3 upload
 app.post('/messages/file', upload.single('file'), async (req, res) => {
-  const { conversationId, senderId } = req.body;
-  const file = req.file;
+  try {
+    const { conversationId, senderId } = req.body;
+    const file = req.file;
+    const s3Key = Date.now() + '-' + file.originalname;
+    await s3.send(new PutObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: s3Key,
+      Body: file.buffer,
+      ContentType: file.mimetype
+    }));
+    const fileUrl = `/files/${encodeURIComponent(s3Key)}`;
 
-  if (!conversationId || !senderId || !file) {
-    return res.status(400).json({ error: 'Missing data or file' });
+    // Save the message in MongoDB
+    const message = new Message({
+      conversationId,
+      senderId,
+      text: file.originalname, // or any text you want
+      fileUrl, // <-- store the S3 file URL
+    });
+    await message.save();
+
+    res.status(201).json(message);
+  } catch (err) {
+    console.error('S3 upload error:', err);
+    res.status(500).json({ error: 'Failed to upload file' });
   }
+});
 
-  const message = new Message({
-    conversationId,
-    senderId,
-    text: `${file.originalname}`,
-    fileUrl: `/uploads/${file.filename}`,
-  });
-
-  await message.save();
-  res.status(201).json(message);
+// Route to get a pre-signed URL for a file
+app.get('/files/:key', async (req, res) => {
+  try {
+    const key = decodeURIComponent(req.params.key);
+    const command = new GetObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: key,
+    });
+    const url = await getSignedUrl(s3, command, { expiresIn: 3600 }); // 1 hour
+    res.redirect(url);
+  } catch (err) {
+    console.error('Error generating signed URL:', err);
+    res.status(404).send('File not found');
+  }
 });
 
 // Start server
